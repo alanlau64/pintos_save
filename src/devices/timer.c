@@ -24,6 +24,10 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+/* List of sleeping processes.  Processes are added to this list
+   after they call timer_sleep() and removed when time up. */
+static struct list sleep_list;
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
@@ -37,6 +41,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init (&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -84,16 +89,37 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
+/* Compare the priority of a list of threads for list_sort(). */
+bool
+list_compare_priority (const struct list_elem *a, 
+                       const struct list_elem *b, void *aux UNUSED)
+{
+  struct thread *t1 = list_entry (a, struct thread, sleepelem);
+  struct thread *t2 = list_entry (b, struct thread, sleepelem);
+  
+  if (t1->priority > t2->priority)
+    return true;
+  else
+    return false; 
+}
+
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
-
-  ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  struct thread *t = thread_current ();
+  enum intr_level old_level;
+  
+  if (ticks > 0)
+  {
+    old_level = intr_disable ();
+    t->sleep_tick = ticks;
+    list_push_back (&sleep_list, &t->sleepelem);
+    list_sort (&sleep_list, list_compare_priority, NULL);
+    thread_block ();
+    intr_set_level (old_level);
+  }
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -120,6 +146,26 @@ timer_nsleep (int64_t ns)
   real_time_sleep (ns, 1000 * 1000 * 1000);
 }
 
+/* Decrease sleep_tick for 1 in sleep_list and unblock the threads
+   whose sleep_tick is 0. */
+void
+timer_wake (void)
+{
+  struct list_elem *e;
+
+  for (e = list_begin (&sleep_list); e != list_end (&sleep_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, sleepelem);
+      if (--t->sleep_tick == 0)
+        {
+          thread_unblock (t);
+          list_remove (&t->sleepelem);
+        }
+    }
+
+}
+ 
 /* Busy-waits for approximately MS milliseconds.  Interrupts need
    not be turned on.
 
@@ -171,6 +217,7 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  timer_wake ();
   thread_tick ();
 }
 
