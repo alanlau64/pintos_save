@@ -472,7 +472,46 @@ thread_get_recent_cpu (void)
 {
   return FPINT (FPIMUL (thread_current ()->recent_cpu, 100));
 }
-
+
+/* Add recent_cpu by 1 at every time tick. */
+void
+thread_recent_cpu_add (void)
+{
+	ASSERT (thread_mlfqs);
+	
+	struct thread *t = thread_current ();
+	if (t == idle_thread)
+		return;
+	t->recent_cpu = FPIADD (t->recent_cpu, 1);
+}
+
+/* Update recent_cpu and load_avg every 100 time ticks. */
+void
+thread_update_load_avg (void)
+{
+	struct thread *t;
+	struct list_elem *e;
+	size_t ready = list_size (&ready_list);
+	
+	ASSERT (thread_mlfqs)
+	
+	if (thread_current () != idle_thread)
+		ready++;
+	load_avg = FPADD (FPIDIV (FPIMUL (load_avg, 59), 60), FPIDIV (FP (ready), 60));
+	
+	e = list_front (&all_list);
+	for (e; e != list_end (&all_list); e = list_next (e);
+		{
+			t = list_entry (e, struct thread, allelem);
+			if (t != idle_thread)
+				{
+					t->recent_cpu = FPIADD (FPMUL (FPDIV (FPIMUL (load_avg, 2),
+													FPIADD (FPIMUL (load_avg, 2), 1)), t->recent_cpu), t->nice);
+					thread_update_priority_mlfqs (t);
+				}
+		}
+}
+
 /* Idle thread.  Executes when no other thread is ready to run.
 
    The idle thread is initially put on the ready list by

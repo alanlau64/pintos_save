@@ -189,7 +189,12 @@ timer_interrupt (struct intr_frame *args UNUSED)
   thread_foreach (check_sleepthread, NULL);
   if (thread_mlfqs)
     {
-      
+      thread_recent_cpu_add ();
+			if (ticks / TIMER_FREQ == 0)
+				thread_update_load_avg ();
+			if (ticks / 4 == 0)
+				thread_update_priority_mlfqs (thread_current ());
+		}
   thread_tick ();
 }
 
